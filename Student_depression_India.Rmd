@@ -1,0 +1,842 @@
+---
+title: "Students' depression in India - exploratory analysis with replication"
+author: "Maria Redmerska"
+output: 
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float:
+      collapsed: true
+---
+
+```{css, echo=FALSE}
+p {
+  margin-top: 20px;   
+  margin-bottom: 20px; 
+  font-size: 16px;  
+}
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(flexplot)
+library(tidyverse)
+```
+
+----
+
+# 0. Loading the data
+
+```{r}
+d <- read.csv("C:/Users/marys/OneDrive/Pulpit/dokumenty i pliki/statisics portfolio/Student_satisfaction/Student_Depression_Dataset.csv") 
+```
+
+```{r}
+# Let's see what we have
+str(d)
+d <- na.omit(d)
+```
+
+----
+
+# 1. Univariate  visualization
+
+```{r}
+flexplot(Depression ~ 1, data = d)
+table(d$Depression)
+```
+
+```{r}
+flexplot(Gender ~ 1, d) 
+
+flexplot(Age ~ 1, data = d)
+table(d$Age)
+```
+
+
+There is very little variability in the data for individuals above the age of 34. Since generalizing to these cases would be impossible regardless, and their inclusion may introduce noise, I will remove people older than 34 from the sample. Given the large size of the dataset, this adjustment shouldn't  to result in a significant loss of information.
+
+
+```{r}
+d = subset(d, Age < 35) #getting rid of the outliers
+```
+
+```{r}
+flexplot(City ~ 1, d) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+table(d$City)
+```
+
+
+I suspect that the city of residence will not influence depression outcomes. Therefore, I will not remove cities with only one individual in the 
+sample.
+
+
+```{r}
+flexplot(Profession  ~ 1, d) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+table(d$Profession)
+```
+
+
+The vast majority of individuals in the sample are students, resulting in minimal variability in this column. Therefore, I will remove this column from the dataset and exclude it from potential predictors.
+
+
+```{r}
+d = d %>%  dplyr::select(-`Profession`) #removing Profession column
+```
+
+```{r}
+flexplot(Academic.Pressure ~ 1, data = d,  bins = length(unique(d$Academic.Pressure)))
+table(d$Academic.Pressure)
+```
+
+
+Individuals with a score of 0 on Academic Pressure appear to be outliers. Therefore, I will remove them from the dataset.
+
+```{r}
+d <- subset(d, Academic.Pressure !=0)
+```
+
+```{r}
+flexplot(Work.Pressure ~ 1, data = d, bins = length(unique(d$Work.Pressure)))
+table(d$Work.Pressure)
+```
+
+
+Similar to the case of Profession, the lack of variability in Work Pressure makes it irrelevant as a potential predictor. Therefore, I will remove it from the list of columns.
+
+
+```{r}
+d = d %>%  dplyr::select(-`Work.Pressure`) #removing Work.Pressure column
+```
+
+```{r}
+flexplot(CGPA ~ 1, data = d)
+table(d$CGPA == 0)
+```
+```{r}
+d <- subset(d, CGPA !=0) #Let's remove the outliers
+```
+
+```{r}
+flexplot(Study.Satisfaction ~ 1, data = d, bins = length(unique(d$Study.Satisfaction)))
+d <- subset(d, Study.Satisfaction !=0) #Let's remove the outliers
+```
+
+```{r}
+flexplot(Job.Satisfaction ~ 1, data = d)
+```
+
+
+Again, due to the lack of variability, I will remove Job Satisfaction from the list of columns and therefore the list of possible predictors.
+
+
+```{r}
+d = d %>%  dplyr::select(-`Job.Satisfaction`) #removing Job.Satisfaction column
+```
+
+```{r}
+d$Sleep.Duration <- factor(d$Sleep.Duration, 
+                           levels = c("Less than 5 hours", "5-6 hours", "7-8 hours", "More than 8 hours",  "Others"), ordered = TRUE)
+flexplot(Sleep.Duration ~ 1, data = d)
+```
+
+
+In Sleep.Duration "Others" category seems meaningless. Let's remove it. 
+
+
+```{r}
+d <- subset(d, Sleep.Duration !="Others")
+```
+
+```{r}
+flexplot(Dietary.Habits ~ 1, data = d)
+d <- subset(d, Dietary.Habits !="Others")
+```
+
+
+Same as above, let's remove "Others" from Dietary Habits. 
+
+
+```{r}
+flexplot(Degree ~ 1, d) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+```
+
+```{r}
+flexplot(Have.you.ever.had.suicidal.thoughts.. ~ 1, data = d)
+```
+```{r}
+flexplot(Work.Study.Hours ~ 1, data = d)
+```
+
+```{r}
+flexplot(Financial.Stress ~ 1, data = d, bins =length(unique(d$Financial.Stress)))
+```
+```{r}
+flexplot(Family.History.of.Mental.Illness ~ 1, data = d)
+```
+
+
+----
+
+# 2. Preparing the data sets for exploration with Random Forests and for later replication
+
+```{r}
+d <- d %>% mutate_if(is.character, as.factor)
+```
+
+
+In this analysis, my primary goal is to infer causality from the model. In other words, I want to understand which factors lead to depression, rather than achieve the highest prediction accuracy. Because suicidal ideation is arguably a consequence rather than a cause of depression, I will remove it from the dataset.
+
+
+```{r}
+data <- d[, !names(d) %in% "Have.you.ever.had.suicidal.thoughts.."] #Removing sucidal ideation
+str(data) # Looking at the data once more, after processing 
+```
+
+```{r}
+set.seed(42) # For reproducibility
+exploratory_sample_size = 5000
+d_small <- data[sample(1:nrow(data), exploratory_sample_size), ]
+d_replicate <- anti_join(data, d_small, by = "id")
+```
+
+
+----
+
+# 3. Exploration with Random Forest
+
+```{r, message=FALSE, warning=FALSE}
+library(party)
+```
+
+Random Forests are a non-parametric method that inherently detect interactions and non-linearity while avoiding overfitting. Although they are considered "black-box" algorithms, they can serve as a valuable stepping stone for creating an informed parametric model. By identifying the most relevant predictors, Random Forests help to avoid violating assumptions caused by missing interactions or non-linearity. For more details see Fife and D’Onofrio (2023).
+
+```{r}
+set.seed(123)  
+rfmodel <- cforest(Depression ~ ., data = d_small)
+estimates_big_model = estimates(rfmodel)
+estimates_big_model
+```
+ 
+ 
+ Let's choose the most relevant predictors and run the model again.
+ 
+ 
+```{r, message=FALSE}
+rfmodel_smaller = cforest(Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours+ Dietary.Habits, data = d_small)
+estimates_smaller_model = estimates(rfmodel_smaller)
+estimates_smaller_model
+```
+
+----
+
+## 3.a Univariete visualization of Random Model predictions
+
+```{r,message=FALSE, warning=FALSE}
+predictions_as = compare.fits(Depression ~  Academic.Pressure , data = d_small, rfmodel_smaller, return.preds = T)
+as = flexplot(Depression ~  Academic.Pressure, data = d_small, prediction = predictions_as, suppress_smooth=TRUE)
+as
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+predictions_fs = compare.fits(Depression ~  Financial.Stress, data = d_small, rfmodel_smaller, return.preds = T)
+fs = flexplot(Depression ~  Financial.Stress, data = d_small, prediction = predictions_fs, suppress_smooth=TRUE)
+fs
+```
+
+```{r, message=FALSE, warning=FALSE}
+predictions_age = compare.fits(Depression ~  Age , data = d_small, rfmodel_smaller, return.preds = T)
+age = flexplot(Depression ~  Age, data = d_small, prediction = predictions_age, suppress_smooth=TRUE)
+age
+```
+
+```{r, message=FALSE, warning=FALSE}
+predictions_wsh= compare.fits(Depression ~  Work.Study.Hours , data = d_small, rfmodel_smaller, return.preds = T)
+wsh = flexplot(Depression ~  Work.Study.Hours, data = d_small, prediction = predictions_wsh, suppress_smooth=TRUE)
+wsh
+```
+
+ 
+All the relationships appear roughly linear. While there are some minor bumps, they likely do not have practical importance. Althernatively, there might be some non-linearity in Work.Study.Hours. 
+
+----
+
+## 3.b Bivarate visualization of Random Model predictions
+
+```{r, message=FALSE, warning=FALSE}
+predictions_fs_ap = compare.fits(Depression ~  Financial.Stress | Academic.Pressure , data = d_small, rfmodel_smaller, return.preds = T,bins = 4)
+a = flexplot(Depression ~  Financial.Stress |Academic.Pressure, data = d_small, prediction = predictions_fs_ap, suppress_smooth=TRUE, bins = 4, ghost.line = "gray")
+
+a
+```
+
+Financial Stress and Academic Pressure might interact. 
+
+```{r, message=FALSE, warning=FALSE}
+predictions_fs_age = compare.fits(Depression ~  Financial.Stress | Age, data = d_small, rfmodel_smaller, return.preds = T)
+b = flexplot(Depression ~  Financial.Stress | Age, data = d_small, prediction = predictions_fs_age,  suppress_smooth=TRUE, ghost.line = "gray")
+
+b 
+```
+
+Seems like there might be an interaction. Also, Financial Stress shows some non-linear patterns. 
+
+
+```{r, message=FALSE, warning=FALSE}
+predictions_ap_age = compare.fits(Depression ~  Academic.Pressure | Age  , data = d_small, rfmodel_smaller, return.preds = T)
+c = flexplot(Depression ~  Academic.Pressure | Age , data = d_small, prediction = predictions_ap_age, suppress_smooth=TRUE, ghost.line = "gray")
+
+c
+```
+
+
+There might be a small interaction affect between Academic.Pressure and Age. 
+
+
+```{r, message=FALSE, warning=FALSE}
+predictions_ap_wsh = compare.fits(Depression ~  Academic.Pressure | Work.Study.Hours, data = d_small, rfmodel_smaller, return.preds = T)
+d = flexplot(Depression ~  Academic.Pressure | Work.Study.Hours , data = d_small, prediction = predictions_ap_age, suppress_smooth=TRUE, ghost.line = "gray")
+
+d
+```
+
+```{r, message=FALSE, warning=FALSE}
+predictions_fs_dh = compare.fits(Depression ~  Financial.Stress | Dietary.Habits, data = d_small, rfmodel_smaller, return.preds = T)
+e = flexplot(Depression ~  Financial.Stress | Dietary.Habits, data = d_small, prediction = predictions_fs_dh, suppress_smooth=TRUE, ghost.line = "gray")
+
+e
+```
+
+
+There might be an interaction effect here as well, although, if present, it seems quite small.
+
+```{r, message=FALSE, warning=FALSE}
+predictions_wsh_dh = compare.fits(Depression ~  Work.Study.Hours | Dietary.Habits, data = d_small, rfmodel_smaller, return.preds = T)
+f = flexplot(Depression ~  Work.Study.Hours | Dietary.Habits, data = d_small, prediction = predictions_wsh_dh, suppress_smooth=TRUE, ghost.line = "gray")
+
+f
+```
+
+
+There might be an interaction between Dietery.Habits and Work.Study.Hours.
+
+----
+
+# 4. Building the model
+
+----
+
+## 4.a Model 1
+
+
+Let's start by building a large, complex model that incorporates the detected interactions and non-linearities.
+
+
+```{r, message=FALSE, warning=FALSE}
+logistic_model_biggest <- glm(Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours + I(Work.Study.Hours^2) + Dietary.Habits + Academic.Pressure*Financial.Stress + I(Financial.Stress^2)*Age + Academic.Pressure*Age + Academic.Pressure*Work.Study.Hours  + Dietary.Habits*Financial.Stress, data = d_small, family = "binomial")
+
+biggest_res = visualize(logistic_model_biggest, plot = "residuals")
+biggest_res
+
+round(coef(summary(logistic_model_biggest)),2)
+```
+
+
+The residuals look good overall. There is some skewness, but it likely stems from the imbalance between the Depression groups. Because both groups have many observations, this skewness shouldn't pose a major problem. Aside from that, it appears that logistic regression works well, so we don’t need to switch to a different model.
+
+Next, let's see if we can simplify the model by removing the least influential predictors.
+
+----
+
+## 4.b Model 2
+
+Removing Work.Study.Hours^2, Age:I(Financial.Stress^2), Academic.Pressure:Age, Academic.Pressure:Work.Study.Hours
+
+```{r, message=FALSE, warning=FALSE}
+logistic_model_simpler <- glm(Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours + Dietary.Habits + Academic.Pressure*Financial.Stress  + Dietary.Habits*Financial.Stress, data = d_small, family = "binomial")
+
+simpler_res = visualize(logistic_model_simpler, plot = "residuals")
+simpler_res
+model.comparison(logistic_model_biggest, logistic_model_simpler)
+
+round(coef(summary(logistic_model_simpler)),2)
+```
+
+There is practically no difference in predictive accuracy. The simpler model is favored by the statistical criteria (AIC, BIC, Bayes Factor), and the p-value indicates no significant difference between the models. Therefore, we should opt for the simpler model. The residuals still look fine.
+
+----
+
+## 4.c Model 3
+
+Getting rid of Academic.Pressure:Financial.Stress.
+
+```{r, message=FALSE, warning=FALSE}
+logistic_model_even_simpler <- glm(Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours + Dietary.Habits +
+                                 Dietary.Habits*Financial.Stress, data = d_small, family = "binomial")
+
+even_simpler_res = visualize(logistic_model_even_simpler, plot = "residuals")
+even_simpler_res
+
+model.comparison(logistic_model_simpler, logistic_model_even_simpler) 
+
+(summary(logistic_model_even_simpler))
+```
+
+
+An even simpler model is preferred, as there is practically no difference in accuracy, and the diagnostic statistics favor the simpler model. The residuals still look fine.
+
+----
+
+## 4.d Model 4
+
+Getting rid of Dietary.Habits:Financial.Stress
+
+```{r,message=FALSE, warning=FALSE}
+logistic_model_smallest <- glm(Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours + Dietary.Habits, data = d_small, family = "binomial")
+
+smallest_res = visualize(logistic_model_smallest, plot = "residuals")
+smallest_res
+
+model.comparison(logistic_model_even_simpler, logistic_model_smallest)
+compare.fits(Depression ~ Financial.Stress|Work.Study.Hours, d_small, logistic_model_even_simpler, logistic_model_smallest)
+
+round(coef(summary(logistic_model_smallest)),3)
+```
+
+----
+
+## 4.e Model 5
+
+Getting rid the of Dietary.Habits 
+
+```{r,message=FALSE, warning=FALSE}
+logistic_model_smallest_2 <- glm(Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours, data = d_small, family = "binomial")
+smallest_2_res = visualize(logistic_model_smallest_2, plot = "residuals")
+
+model.comparison(logistic_model_smallest, logistic_model_smallest_2) 
+```
+
+The statistics suggest keeping all the predictors.
+
+----
+
+## 4.f. Final model
+
+```{r}
+final_model <- logistic_model_smallest
+```
+
+----
+
+## 4.g Visualizing the difference between the final model and the biggest model
+
+```{r, message=FALSE, warning=FALSE}
+compare.fits(Depression ~ Academic.Pressure |Financial.Stress, d_small, final_model, logistic_model_biggest)
+compare.fits(Depression ~ Financial.Stress|Age, d_small, final_model, logistic_model_biggest)
+compare.fits(Depression ~ Work.Study.Hours, d_small, final_model, logistic_model_biggest)
+compare.fits(Depression ~ Financial.Stress|Dietary.Habits, d_small, final_model, logistic_model_biggest)
+```
+
+
+As the plots show, the reduced model generates practically the same predictions. Therefore, we have arrived at the smallest model with the greatest explanatory power, ensuring that no interactions or non-linear effects were overlooked.
+
+
+----
+
+# 5. Checking assumption. 
+
+----
+
+## 5.a Checking residuals
+
+```{r, message=FALSE, warning=FALSE}
+final_res <- visualize(final_model, plot = "residuals")
+final_res
+```
+
+The residuals generally look fine. However, there is some skewness, likely caused by unequal group sizes in the Depression variable. To confirm, let's conduct a sensitivity analysis.
+
+----
+
+## 5. b Sensitivity analysis for unequal groups
+
+Let's create a data set with equal Depression groups. 
+
+```{r}
+#Subset data where Depression == "Yes"
+depression_yes <- subset(d_small, Depression == 1)
+nrow(depression_yes)
+```
+
+```{r}
+#Subset data where Depression == "No"
+depression_no <- subset(d_small, Depression == 0)
+nrow(depression_no)
+```
+
+```{r}
+sample_yes <- depression_yes[sample(1:nrow(depression_yes), nrow(depression_no)), ]
+data_equal <- rbind(sample_yes, depression_no)
+```
+ 
+Let's now compare the estimates and the residuals of the final model and the sensitivity model.
+
+```{r}
+sensitivity_log_regression <- glm(Depression ~ Academic.Pressure + Financial.Stress + Age + Academic.Pressure + Work.Study.Hours +Dietary.Habits, data = data_equal, family = "binomial")
+visualize(sensitivity_log_regression, plot = "residuals")
+```
+
+```{r}
+round(coef(summary(sensitivity_log_regression)),2)
+```
+
+```{r}
+round(coef(summary(final_model)),2)
+```
+
+Residuals are not skewed in the sensitivity model. 
+The estimates are practically very similar, therefore, as suspected, the final model is robust to unequal groups. 
+
+----
+
+## 5.c Checking for multicollinearity
+
+```{r, message=FALSE, warning=FALSE}
+library(car)
+vif(final_model)
+```
+
+There is no multicollinearity. 
+
+----
+
+## 5.d Checking the assumpation of linearity of the log odds.
+
+The relationship between the independent variables and the logit (log-odds) of the dependent variable should be linear. We previously checked for linearity, but let's verify it again using partial residual plots.
+
+ 
+```{r}
+plot_academic_pressure = partial_residual_plot(Depression ~ Academic.Pressure, 
+                      data = d_small, 
+                      model = final_model, 
+                      method = 'binomial', 
+                      added_term = ~ Academic.Pressure, 
+                      add_mean = T, 
+                      suppress_model = T) + theme(axis.title  = element_text(size = 8))
+
+plot_financial_stress = partial_residual_plot(Depression ~  Financial.Stress, 
+                      data = d_small, 
+                      model = final_model, 
+                      method = 'loess', 
+                      added_term = ~ Financial.Stress, 
+                      add_mean = T, 
+                      suppress_model = T) + theme(axis.title  = element_text(size = 8))
+
+plot_age = partial_residual_plot(Depression ~  Age, 
+                      data = d_small, 
+                      model = final_model, 
+                      method = 'loess', 
+                      added_term = ~ Age, 
+                      add_mean = T, 
+                      suppress_model = T) + theme(axis.title  = element_text(size = 8))
+
+plot_work_study_hours = partial_residual_plot(Depression ~  Work.Study.Hours, 
+                      data = d_small, 
+                      model = final_model, 
+                      method = 'loess', 
+                      added_term = ~Work.Study.Hours, 
+                      add_mean = T, 
+                      suppress_model = T) + theme(axis.title  = element_text(size = 8))
+
+
+plot_dietary_habits = partial_residual_plot(Depression ~  Dietary.Habits, 
+                                            data = d_small, 
+                                            model = final_model, 
+                                            method = 'loess', 
+                                            added_term = ~ Dietary.Habits, 
+                                            add_mean = T, 
+                                            suppress_model = T) + theme(axis.title  = element_text(size = 8))
+
+plot_academic_pressure + plot_financial_stress + plot_age 
+```
+
+```{r}
+plot_work_study_hours + plot_dietary_habits
+```
+
+
+The partial residual plots indicate a linear relationship between the predictors and the log-odds of depression, confirming that the assumption is satisfied.
+
+----
+ 
+# 6. Validation with Bayes 
+
+Let's do Bayesian analysis to validate the results.
+
+```{r, message=FALSE, warning=FALSE}
+library(brms)
+
+# Bayesian logistic regression
+bayesian_model <- brm(
+  formula = Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours + Dietary.Habits, 
+  family = bernoulli(link = "logit"),   # Logistic regression
+  data = d_small,                      
+  chains = 2,
+  iter = 1000,
+  warmup = 500,
+  cores = parallel::detectCores(),     
+  seed = 123                           
+)
+```
+
+```{r}
+summary(bayesian_model)
+```
+
+```{r}
+round(coef(summary(final_model)),2)
+```
+
+
+The estimates are practically the same. 
+
+Now, let's use these estimates as priors for the replication with the replication data. **Important Note**: This is an example of how Bayesian analysis can be used to integrate the results of separate studies. This step is unnecessary if we have a single, large data set. However, this analysis is intended to demonstrate how Bayesian methods could potentially be applied in social sciences. You can think of this as a toy example and use it to compare the results of frequentest and Bayesian analyses.
+
+An additional advantage of Bayesian analysis is that credible intervals are easier to interpret than confidence intervals, which makes understading the results easier. 
+
+----
+
+# 7. Replication with previously caluculated priors.
+
+Let's prepare the priors from the previews model posteriors.
+
+```{r}
+post_summary <- posterior_summary(bayesian_model) # extracting posterior samples and summary from the previous model
+priors <- post_summary[, c("Estimate", "Est.Error")]  # getting the mean and sd
+```
+
+```{r}
+get_prior(
+    formula = Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours + Dietary.Habits, 
+    family = bernoulli(link = "logit"),   # Logistic regression
+    data = d_small
+  )
+```
+
+```{r}
+new_priors <- c(
+  prior(normal(0.827918491056999, 0.0294906108961088),
+        class = "b", coef = "Academic.Pressure"),
+  prior(normal(0.52893930552485, 0.0258792828687627),
+        class = "b", coef = "Financial.Stress"),
+  prior(normal(-0.0955002003710701, 0.00743610327241618),
+        class = "b", coef = "Age"),
+  prior(normal(0.125246665425915, 0.0101009445199838),
+        class = "b", coef = "Work.Study.Hours"),
+  prior(normal(0.448323378967127, 0.0902480274799822),
+        class = "b", coef = "Dietary.HabitsModerate"),
+  prior(normal(0.991107015443824, 0.0925909122315701),
+        class = "b", coef = "Dietary.HabitsUnhealthy"),
+  # Notice here we move the Intercept prior to class = "Intercept"
+  # to match what get_prior() usually does for the global intercept
+  prior(normal(0.444188670487463, 0.0367001476738718), 
+        class = "Intercept")
+)
+
+new_priors
+```
+
+Now, let's see if we replicate the results with replication data set. 
+
+```{r, message=FALSE, warnings=FALSE}
+# Fit the Bayesian model with the updated priors
+replication_model <- brm(
+  Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours + Dietary.Habits,
+  data = d_replicate,
+  family = bernoulli(),
+  prior = new_priors,
+  chains = 2,
+  iter = 1000,
+  warmup = 500,
+  cores = parallel::detectCores(),
+  seed = 123
+)
+
+posterior_draws <- as_draws_df(replication_model) # extracting posterior samples
+
+summary_model1 <- posterior_summary(bayesian_model) # summarizing posterior distributions
+summary_model2 <- posterior_summary(replication_model)
+```
+
+```{r}
+round((summary_model1),2) # view summaries for comparison
+```
+
+```{r}
+round((summary_model2),2)
+```
+
+# 8.Results
+
+```{r}
+big_final_model = glm(Depression ~ Academic.Pressure + Financial.Stress + Age + Work.Study.Hours + Dietary.Habits,  data = data, family = "binomial")
+round(coef(summary(big_final_model)),2)
+```
+
+Since the estimates are identical, I will use the frequencies model for visualization as it offers greater convenience.
+
+Now, let's transform the results into a more interpretable format.
+
+```{r, warning=FALSE, message=FALSE}
+smaller_table_data <- data.frame(
+  LogOdds       = round(summary_model2[, "Estimate"], 2),
+  OddsRatio     = round(exp(summary_model2[, "Estimate"]), 2),
+  PctChangeOdds = round((exp(summary_model2[, "Estimate"]) - 1) * 100, 2)
+)
+
+table_data <- data.frame(
+  OddsRatio  = round(exp(summary_model2[, "Estimate"]), 2),
+  OddsRatio_Q2.5 = round(exp(summary_model2[, "Q2.5"]), 2),
+  OddsRatio_Q97.5 = round(exp(summary_model2[, "Q97.5"]), 2),
+  PctChangeOdds = round((exp(summary_model2[, "Estimate"]) - 1) * 100, 2),
+  PctChangeOdds_Q2.5 = round((exp(summary_model2[, "Q2.5"]) - 1) * 100, 2),
+  PctChangeOdds_Q97.5 = round((exp(summary_model2[, "Q97.5"]) - 1) * 100, 2)
+)
+
+final_summary_table <- table_data[1:7,]
+
+library(knitr)
+library(kableExtra)
+
+pretty_summary_table <- kable(final_summary_table, 
+      caption = "Log-odds, Odds Ratios, and % Change in Odds for big_final_model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+pretty_summary_table
+```
+
+
+----
+
+# 9. Interpretation with visualization. 
+
+**Important Note**: The interpretation of all effects assumes that all predictors act through a direct effect and do not operate indirectly through other predictors For a discussion on how interpretations change based on causal models, refer to Westreich & Greenland (2013).
+
+```{r, message=FALSE, warning=FALSE}
+#Let's prepare the marginal plots.
+ap_margian_plot =  compare.fits(Depression ~ Academic.Pressure, data, big_final_model)
+fs_margian_plot = compare.fits(Depression ~ Financial.Stress, data, big_final_model) 
+age_margian_plot = compare.fits(Depression ~ Age, data, big_final_model) 
+wsh_margian_plot = compare.fits(Depression ~ Work.Study.Hours, data, big_final_model) 
+dh_partial_residual_plot = partial_residual_plot(Depression ~ Dietary.Habits, 
+                      data = data, 
+                      model = big_final_model, 
+                      method = 'binomial', 
+                      added_term = ~ Dietary.Habits, 
+                      add_mean = T, 
+                      suppress_model = T) + theme(axis.title  = element_text(size = 8))
+```
+
+
+----
+
+## 9.0 Intercept - base probability
+
+```{r, message=FALSE, warning=FALSE}
+library(bayesplot)
+mcmc_areas(posterior_draws, pars = "b_Intercept")
+
+kable(final_summary_table[1,],caption = "Log-odds, Odds Ratios, and % Change in Odds for big_final_model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+When all predictors are at 0 (or their reference/mean-centered values), the odds of Depression = 1 are 0.07 [95% CI 0.05, 0.08].
+
+----
+
+## 9.a Depression and Academic Pressure
+
+```{r}
+ap_margian_plot 
+mcmc_areas(posterior_draws, pars = "b_Academic.Pressure")
+kable(final_summary_table[2,],caption = "Log-odds, Odds Ratios, and % Change in Odds for big_final_model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+A 1-unit increase in Academic.Pressure is associated with a 2.33 [95% credible interval 2.27, 2.4] times increase in the odds of Depression— i.e., a 134% [95% CI 128, 140] higher odds of having Depression among Indian students, age 18-34. 
+
+----
+
+## 9.b Depression and Financial Stress
+
+```{r}
+fs_margian_plot
+mcmc_areas(posterior_draws, pars = "b_Financial.Stress")
+kable(final_summary_table[3,],caption = "Log-odds, Odds Ratios, and % Change in Odds for big_final_model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+A 1-unit increase in Financial.Stress increases the odds of depression by 73% [95% CI 70, 77], among students from India, age 18-34. 
+
+----
+
+## 9.c Depression and Age
+
+```{r}
+age_margian_plot
+mcmc_areas(posterior_draws, pars = "b_Age")
+kable(final_summary_table[4,],caption = "Log-odds, Odds Ratios, and % Change in Odds for big_final_model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+Each additional year of age corresponds to about a 10% [95% CI 9, 10] decrease in the odds of depression (0.90 time [95% CI 0.9, 0.91]). Older individuals, on average, have somewhat lower odds of depression, under this model among students from India, age 18-34
+
+----
+
+## 9.d Depression and Work Study Hours
+
+```{r}
+wsh_margian_plot
+mcmc_areas(posterior_draws, pars = "b_Work.Study.Hours")
+kable(final_summary_table[5,],caption = "Log-odds, Odds Ratios, and % Change in Odds for big_final_model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+
+Every extra hour of work/study raises the odds of depression by around 13% [95% 12, 14]. This suggests a modest impact on depression risk increase as workload increases among students from India, age 18-34.
+
+----
+
+## 9.e Depression and Dietary Habits 
+
+```{r}
+dh_partial_residual_plot
+mcmc_areas(posterior_draws, pars = "b_Dietary.HabitsUnhealthy")
+mcmc_areas(posterior_draws, pars = "b_Dietary.HabitsUnhealthy")
+kable(final_summary_table[6,],caption = "Log-odds, Odds Ratios, and % Change in Odds for big_final_model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+kable(final_summary_table[7,],caption = "Log-odds, Odds Ratios, and % Change in Odds for big_final_model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+
+“Moderate” dietary habits (vs. “Healthy”) increase the odds of depression by roughly 66% [95% CI 52, 77]. In other words, students with a moderately healthy diet have higher odds of depression. 
+
+
+“Unhealthy” dietary habits (vs. “Healthy”) nearly triple the odds of depression (+187% [95% CI 166, 210]). This is the largest effect among the dietary habit categories, suggesting a strong association with worse mental health outcomes for students from India.
+
+----
+
+# 9. References
+
+Fife, D. (2020). The Eight Steps of Data Analysis: A Graphical Framework to Promote Sound Statistical Analysis. Perspectives on Psychological Science, 15(4), 1054-1075. https://doi.org/10.1177/1745691620917333
+
+Fife, D.A., D’Onofrio, J. Common, uncommon, and novel applications of random forest in psychological research. Behav Res 55, 2447–2466 (2023). https://doi.org/10.3758/s13428-022-01901-9
+
+Westreich, D., & Greenland, S. (2013). The table 2 fallacy: presenting and interpreting confounder and modifier coefficients. American journal of epidemiology, 177(4), 292-298. https://doi.org/10.1093/aje/kws412
+
+
+
+
+
+
