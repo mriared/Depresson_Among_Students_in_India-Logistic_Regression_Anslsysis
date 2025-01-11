@@ -8,7 +8,7 @@ To see the analysis online go to: http://rpubs.com/MariaRed/1262329.
 
 Importantly, in this study, depression is a binary variable. Since depression is rarely a categorical condition, it would be better represented on a continuous scale. Therefore, it should be noted that the dataset is based on a rough simplification. Additionally, the results should not be generalized to the entire population but rather only to Indian students aged 18–34. 
 
-**Before running the code**: The original analysis was conducted on an exploratory sample size equal to 5000. However, since it takes a long time to compute, the code here runs on a sample size equal to 2000. You can change the sample size, however, keep in mind that the conclusion from the Radnom Forest visualization might change. 
+**Before running the code**: The original analysis was conducted on an exploratory sample size equal to 5000. However, since it takes a long time to compute, you can change the sample size by changing the value of "exploratory_sample_size". 
 
 The analysis consists of the following steps:
 
